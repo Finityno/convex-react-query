@@ -1,7 +1,7 @@
-import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery, useInfiniteQuery } from "@tanstack/react-query";
 import { test, describe, expectTypeOf, assertType } from "vitest";
-import { convexAction, convexQuery } from "./index.js";
-import { FunctionArgs, FunctionReference } from "convex/server";
+import { convexAction, convexQuery, convexPaginatedQuery } from "./index.js";
+import { FunctionArgs, FunctionReference, PaginationResult, PaginationOptions } from "convex/server";
 import * as convexReact from "convex/react";
 
 // Mock Convex function references for testing
@@ -82,6 +82,35 @@ const search = {
   Array<{ id: string; text: string }>
 >;
 
+// Paginated query with required args
+type MessageItem = { _id: string; body: string; channelId: string };
+const listPaginated = {
+  _type: "query" as const,
+  _visibility: "public" as const,
+  _args: {} as { channelId: string; paginationOpts: PaginationOptions },
+  _returnType: {} as PaginationResult<MessageItem>,
+  _componentPath: undefined,
+} satisfies FunctionReference<
+  "query",
+  "public",
+  { channelId: string; paginationOpts: PaginationOptions },
+  PaginationResult<MessageItem>
+>;
+
+// Paginated query with no additional args (just paginationOpts)
+const listAllPaginated = {
+  _type: "query" as const,
+  _visibility: "public" as const,
+  _args: {} as { paginationOpts: PaginationOptions },
+  _returnType: {} as PaginationResult<MessageItem>,
+  _componentPath: undefined,
+} satisfies FunctionReference<
+  "query",
+  "public",
+  { paginationOpts: PaginationOptions },
+  PaginationResult<MessageItem>
+>;
+
 // Mock API structure matching the real Convex API
 const api = {
   weather: {
@@ -93,6 +122,8 @@ const api = {
     countWithOptionalArg,
     getByAuthor,
     search,
+    listPaginated,
+    listAllPaginated,
   },
 } as const;
 
@@ -517,5 +548,119 @@ describe("query options factory types", () => {
 
     // Both functions should have the same type structure for consistency
     // The fix ensures convexAction uses `as any` like convexQuery does
+  });
+});
+
+describe("paginated query options factory types", () => {
+  test("with useInfiniteQuery - required args", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    {
+      // Should work with required args
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+      const result = useInfiniteQuery(options);
+
+      // Data should be InfiniteData with pages of PaginationResult
+      expectTypeOf(result.data?.pages[0]?.page[0]).toEqualTypeOf<
+        MessageItem | undefined
+      >();
+    }
+
+    {
+      // Should error when missing required args
+      const _options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        // @ts-expect-error channelId is required
+        {},
+        { initialNumItems: 20 },
+      );
+    }
+  });
+
+  test("with useInfiniteQuery - no additional args", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    {
+      // Should work with empty args when query only has paginationOpts
+      const options = convexPaginatedQuery(
+        api.messages.listAllPaginated,
+        {},
+        { initialNumItems: 10 },
+      );
+      const result = useInfiniteQuery(options);
+
+      expectTypeOf(result.data?.pages[0]?.page[0]).toEqualTypeOf<
+        MessageItem | undefined
+      >();
+    }
+  });
+
+  test("with skip pattern", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    const shouldFetch = true;
+
+    {
+      // Should work with conditional skip
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        shouldFetch ? { channelId: "123" } : "skip",
+        { initialNumItems: 20 },
+      );
+
+      // Should have enabled property when skip is possible
+      expectTypeOf(options).toHaveProperty("enabled");
+    }
+  });
+
+  test("query key structure", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      // Query key should be tuple with "convexPaginatedQuery" prefix
+      expectTypeOf(options.queryKey[0]).toEqualTypeOf<"convexPaginatedQuery">();
+    }
+  });
+
+  test("getNextPageParam function", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      // getNextPageParam should be a function that takes PaginationResult
+      expectTypeOf(options.getNextPageParam).toBeFunction();
+
+      // Should have initialPageParam
+      expectTypeOf(options.initialPageParam).toEqualTypeOf<string | null>();
+    }
+  });
+
+  test("meta contains numItems", () => {
+    if (1 + 2 === 3) return; // type test only - prevent runtime execution
+
+    {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expectTypeOf(options.meta.__convexNumItems).toEqualTypeOf<number>();
+    }
   });
 });

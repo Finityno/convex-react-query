@@ -20,10 +20,22 @@ import {
   FunctionReference,
   FunctionReturnType,
   getFunctionName,
+  PaginationResult,
 } from "convex/server";
+import type {
+  PaginatedQueryReference,
+  PaginatedQueryArgs,
+  PaginatedQueryItem,
+} from "convex/react";
 
 type EmptyObject = Record<string, never>;
 import { convexToJson } from "convex/values";
+
+/**
+ * Page parameter type for Convex paginated queries.
+ * null = first page, string = cursor for subsequent pages.
+ */
+type ConvexPageParam = string | null;
 
 // Re-export React Query-friendly names for Convex hooks.
 // Never importing "convex/react" from application code should
@@ -37,6 +49,13 @@ export {
   useConvex,
   useConvexAuth,
   optimisticallyUpdateValueInPaginatedQuery,
+} from "convex/react";
+
+// Re-export pagination types for convenience
+export type {
+  PaginatedQueryReference,
+  PaginatedQueryArgs,
+  PaginatedQueryItem,
 } from "convex/react";
 
 const isServer = typeof window === "undefined";
@@ -73,6 +92,16 @@ function isConvexAction(
   return queryKey.length >= 2 && queryKey[0] === "convexAction";
 }
 
+function isConvexPaginatedQuery(
+  queryKey: readonly any[],
+): queryKey is [
+  "convexPaginatedQuery",
+  FunctionReference<"query">,
+  Record<string, any>,
+] {
+  return queryKey.length >= 2 && queryKey[0] === "convexPaginatedQuery";
+}
+
 function hash(
   queryKey: [
     "convexQuery",
@@ -82,6 +111,18 @@ function hash(
   ],
 ): string {
   return `convexQuery|${getFunctionName(queryKey[1])}|${JSON.stringify(
+    convexToJson(queryKey[2]),
+  )}`;
+}
+
+function hashPaginatedQuery(
+  queryKey: [
+    "convexPaginatedQuery",
+    FunctionReference<"query">,
+    Record<string, any>,
+  ],
+): string {
+  return `convexPaginatedQuery|${getFunctionName(queryKey[1])}|${JSON.stringify(
     convexToJson(queryKey[2]),
   )}`;
 }
@@ -145,6 +186,22 @@ export class ConvexQueryClient {
       ];
     }
   >;
+  /**
+   * Tracks subscriptions for paginated queries.
+   * Each paginated query can have multiple page subscriptions (one per cursor).
+   */
+  paginatedSubscriptions: Record<
+    string, // queryHash for the infinite query
+    {
+      funcRef: FunctionReference<"query">;
+      baseArgs: Record<string, any>;
+      numItems: number;
+      pages: Map<
+        string | null, // cursor (null = first page)
+        { watch: Watch<any>; unsubscribe: () => void }
+      >;
+    }
+  >;
   unsubscribe: (() => void) | undefined;
   // Only exists during SSR
   serverHttpClient?: ConvexHttpClient;
@@ -175,6 +232,7 @@ export class ConvexQueryClient {
       this.ssrQueryMode = "consistent";
     }
     this.subscriptions = {};
+    this.paginatedSubscriptions = {};
     if (options.queryClient) {
       this._queryClient = options.queryClient;
       this.unsubscribe = this.subscribeInner(
@@ -257,9 +315,152 @@ export class ConvexQueryClient {
     }
   }
 
+  /**
+   * Creates a WebSocket subscription for a specific page of a paginated query.
+   */
+  private subscribeToPage(
+    queryHash: string,
+    funcRef: FunctionReference<"query">,
+    baseArgs: Record<string, any>,
+    cursor: string | null,
+    numItems: number,
+  ): { watch: Watch<any>; unsubscribe: () => void } {
+    const fullArgs = {
+      ...baseArgs,
+      paginationOpts: { numItems, cursor },
+    };
+
+    const watch = this.convexClient.watchQuery(funcRef, fullArgs, {});
+    const unsubscribe = watch.onUpdate(() => {
+      this.onPaginatedPageUpdate(queryHash, cursor);
+    });
+
+    return { watch, unsubscribe };
+  }
+
+  /**
+   * Handles updates from a page subscription for paginated queries.
+   * Updates just the specific page in the infinite query data.
+   */
+  private onPaginatedPageUpdate(queryHash: string, cursor: string | null) {
+    const sub = this.paginatedSubscriptions[queryHash];
+    if (!sub) return;
+
+    const pageSub = sub.pages.get(cursor);
+    if (!pageSub) return;
+
+    const query = this.queryClient.getQueryCache().get(queryHash);
+    if (!query) return;
+
+    let result: { ok: true; value: any } | { ok: false; error: unknown };
+    try {
+      result = { ok: true, value: pageSub.watch.localQueryResult() };
+    } catch (error) {
+      result = { ok: false, error };
+    }
+
+    if (result.ok) {
+      const newPageData = result.value;
+      // Update just this page in the infinite query data
+      this.queryClient.setQueryData(
+        query.queryKey,
+        (oldData: { pages: any[]; pageParams: (string | null)[] } | undefined) => {
+          if (!oldData?.pages) return oldData;
+
+          const pageIndex = oldData.pageParams.indexOf(cursor);
+          if (pageIndex === -1) return oldData;
+
+          const newPages = [...oldData.pages];
+          newPages[pageIndex] = newPageData;
+
+          return { ...oldData, pages: newPages };
+        },
+      );
+    } else {
+      const { error } = result;
+      // Set error state similar to regular queries
+      query?.setState(
+        {
+          error: error as Error,
+          errorUpdateCount: query.state.errorUpdateCount + 1,
+          errorUpdatedAt: Date.now(),
+          fetchFailureCount: query.state.fetchFailureCount + 1,
+          fetchFailureReason: error as Error,
+          fetchStatus: "idle",
+          status: "error",
+        },
+        { meta: "set by ConvexQueryClient" },
+      );
+    }
+  }
+
   subscribeInner(queryCache: QueryCache): () => void {
     if (isServer) return () => {};
     return queryCache.subscribe((event) => {
+      // Handle paginated queries separately
+      if (isConvexPaginatedQuery(event.query.queryKey)) {
+        switch (event.type) {
+          case "added": {
+            // Initialize tracking for this paginated query
+            const [_, func, baseArgs] = event.query.queryKey;
+            const numItems =
+              (event.query.options.meta as Record<string, unknown> | undefined)
+                ?.__convexNumItems ?? 10;
+
+            this.paginatedSubscriptions[event.query.queryHash] = {
+              funcRef: func,
+              baseArgs,
+              numItems: numItems as number,
+              pages: new Map(),
+            };
+            break;
+          }
+          case "updated": {
+            // When data is successfully fetched, subscribe to new pages
+            if (
+              event.action.type === "success" &&
+              event.action.data &&
+              typeof event.action.data === "object" &&
+              "pageParams" in event.action.data
+            ) {
+              const data = event.action.data as {
+                pageParams: (string | null)[];
+              };
+              const sub = this.paginatedSubscriptions[event.query.queryHash];
+              if (!sub) break;
+
+              // Subscribe to any new pages
+              for (const cursor of data.pageParams) {
+                if (!sub.pages.has(cursor)) {
+                  const pageSub = this.subscribeToPage(
+                    event.query.queryHash,
+                    sub.funcRef,
+                    sub.baseArgs,
+                    cursor,
+                    sub.numItems,
+                  );
+                  sub.pages.set(cursor, pageSub);
+                }
+              }
+            }
+            break;
+          }
+          case "removed": {
+            // Clean up all page subscriptions
+            const sub = this.paginatedSubscriptions[event.query.queryHash];
+            if (sub) {
+              for (const pageSub of sub.pages.values()) {
+                pageSub.unsubscribe();
+              }
+              delete this.paginatedSubscriptions[event.query.queryHash];
+            }
+            break;
+          }
+        }
+        return;
+      }
+
+      // Handle regular convex queries
       if (!isConvexQuery(event.query.queryKey)) {
         return;
       }
@@ -375,6 +576,28 @@ export class ConvexQueryClient {
           return await this.convexClient.query(func, args);
         }
       }
+      if (isConvexPaginatedQuery(context.queryKey)) {
+        const [_, func, baseArgs] = context.queryKey;
+        const pageParam = context.pageParam as ConvexPageParam;
+        const numItems =
+          (context.meta as Record<string, unknown> | undefined)?.__convexNumItems ??
+          10;
+
+        const fullArgs = {
+          ...baseArgs,
+          paginationOpts: { numItems, cursor: pageParam },
+        };
+
+        if (isServer) {
+          if (this.ssrQueryMode === "consistent") {
+            return await this.serverHttpClient!.consistentQuery(func, fullArgs);
+          } else {
+            return await this.serverHttpClient!.query(func, fullArgs);
+          }
+        } else {
+          return await this.convexClient.query(func, fullArgs);
+        }
+      }
       if (isConvexAction(context.queryKey)) {
         const [_, func, args] = context.queryKey;
         if (isServer) {
@@ -406,6 +629,9 @@ export class ConvexQueryClient {
     return (queryKey: ReadonlyArray<unknown>) => {
       if (isConvexQuery(queryKey)) {
         return hash(queryKey);
+      }
+      if (isConvexPaginatedQuery(queryKey)) {
+        return hashPaginatedQuery(queryKey);
       }
       return otherHashKey(queryKey);
     };
@@ -451,6 +677,61 @@ export class ConvexQueryClient {
       // We cannot set hashFn here, see
       // https://github.com/TanStack/query/issues/4052#issuecomment-1296174282
       // so the developer must set it globally.
+    };
+  };
+
+  /**
+   * Infinite query options factory for Convex paginated query function subscriptions.
+   * Use this with TanStack Query's `useInfiniteQuery` hook.
+   *
+   * ```tsx
+   * useInfiniteQuery(client.infiniteQueryOptions(api.messages.list, { channelId }, { initialNumItems: 20 }))
+   * ```
+   *
+   * If you need to specify other options, spread it:
+   * ```tsx
+   * useInfiniteQuery({
+   *   ...convexQueryClient.infiniteQueryOptions(api.messages.list, { channelId }, { initialNumItems: 20 }),
+   *   gcTime: 60000,
+   * });
+   * ```
+   */
+  infiniteQueryOptions = <Query extends PaginatedQueryReference>(
+    funcRef: Query,
+    args: PaginatedQueryArgs<Query>,
+    options: ConvexPaginatedQueryOptions,
+  ): {
+    queryKey: readonly [
+      "convexPaginatedQuery",
+      Query,
+      PaginatedQueryArgs<Query>,
+    ];
+    queryFn: QueryFunction<PaginationResult<PaginatedQueryItem<Query>>, readonly unknown[], ConvexPageParam>;
+    initialPageParam: ConvexPageParam;
+    getNextPageParam: (
+      lastPage: PaginationResult<PaginatedQueryItem<Query>>,
+    ) => ConvexPageParam | undefined;
+    staleTime: number;
+    meta: { __convexNumItems: number };
+  } => {
+    return {
+      queryKey: [
+        "convexPaginatedQuery",
+        getFunctionName(funcRef) as unknown as Query,
+        args,
+      ] as const,
+      queryFn: this.queryFn(),
+      initialPageParam: null as ConvexPageParam,
+      getNextPageParam: (
+        lastPage: PaginationResult<PaginatedQueryItem<Query>>,
+      ): ConvexPageParam | undefined => {
+        if (lastPage.isDone) {
+          return undefined;
+        }
+        return lastPage.continueCursor;
+      },
+      staleTime: Infinity,
+      meta: { __convexNumItems: options.initialNumItems },
     };
   };
 }
@@ -576,6 +857,84 @@ export function convexAction<
     ],
     staleTime: Infinity,
     ...(finalArgs === "skip" ? { enabled: false } : {}),
+  } as any;
+}
+
+/**
+ * Options for convexPaginatedQuery.
+ */
+export interface ConvexPaginatedQueryOptions {
+  /** Number of items to load per page */
+  initialNumItems: number;
+}
+
+/**
+ * Infinite query options factory for Convex paginated query functions.
+ * Use this with TanStack Query's `useInfiniteQuery` hook for real-time
+ * paginated data with "Load More" or infinite scroll UIs.
+ *
+ * This options factory requires that `convexQueryClient.queryFn()` has been set
+ * as the default `queryFn` globally.
+ *
+ * Each loaded page will automatically subscribe to real-time updates.
+ *
+ * ```tsx
+ * const { data, fetchNextPage, hasNextPage } = useInfiniteQuery(
+ *   convexPaginatedQuery(api.messages.list, { channelId }, { initialNumItems: 20 })
+ * );
+ *
+ * // Flatten pages into a single array
+ * const messages = data?.pages.flatMap(page => page.page) ?? [];
+ * ```
+ *
+ * For conditional queries, pass "skip" as the args:
+ * ```tsx
+ * useInfiniteQuery(
+ *   convexPaginatedQuery(api.messages.byUser, userId ? { userId } : "skip", { initialNumItems: 10 })
+ * )
+ * ```
+ */
+export function convexPaginatedQuery<Query extends PaginatedQueryReference>(
+  funcRef: Query,
+  args: PaginatedQueryArgs<Query> | "skip",
+  options: ConvexPaginatedQueryOptions,
+): {
+  queryKey: readonly [
+    "convexPaginatedQuery",
+    Query,
+    PaginatedQueryArgs<Query> | Record<string, never>,
+  ];
+  initialPageParam: ConvexPageParam;
+  getNextPageParam: (
+    lastPage: PaginationResult<PaginatedQueryItem<Query>>,
+  ) => ConvexPageParam | undefined;
+  staleTime: number;
+  meta: { __convexNumItems: number };
+  enabled?: boolean;
+} {
+  const skip = args === "skip";
+  const baseArgs = skip ? ({} as Record<string, never>) : args;
+
+  return {
+    queryKey: [
+      "convexPaginatedQuery",
+      // Make query key serializable
+      getFunctionName(funcRef) as unknown as Query,
+      // TODO bigints are not serializable
+      baseArgs,
+    ] as const,
+    initialPageParam: null as ConvexPageParam,
+    getNextPageParam: (
+      lastPage: PaginationResult<PaginatedQueryItem<Query>>,
+    ): ConvexPageParam | undefined => {
+      if (lastPage.isDone) {
+        return undefined;
+      }
+      return lastPage.continueCursor;
+    },
+    staleTime: Infinity,
+    meta: { __convexNumItems: options.initialNumItems },
+    ...(skip ? { enabled: false } : {}),
   } as any;
 }
 

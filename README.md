@@ -96,6 +96,57 @@ const { mutate } = useMutation({
 });
 ```
 
+# Paginated Queries
+
+For paginated data with "Load More" or infinite scroll UIs, use
+`convexPaginatedQuery` with TanStack Query's `useInfiniteQuery`:
+
+```tsx
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { convexPaginatedQuery } from "@convex-dev/react-query";
+import { api } from "../convex/_generated/api";
+
+function MessageList({ channelId }) {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(
+    convexPaginatedQuery(api.messages.list, { channelId }, { initialNumItems: 20 })
+  );
+
+  // Flatten pages into a single array
+  const messages = data?.pages.flatMap(page => page.page) ?? [];
+
+  return (
+    <div>
+      {messages.map(msg => <Message key={msg._id} {...msg} />)}
+      {hasNextPage && (
+        <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+          {isFetchingNextPage ? "Loading..." : "Load More"}
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+Each loaded page automatically subscribes to real-time updates via WebSocket,
+just like regular `convexQuery` queries.
+
+For conditional queries, pass `"skip"` as the args:
+
+```tsx
+useInfiniteQuery(
+  convexPaginatedQuery(
+    api.messages.byUser,
+    userId ? { userId } : "skip",
+    { initialNumItems: 10 }
+  )
+)
+```
+
 # Authentication
 
 **Note:** The example app includes a basic Convex Auth implementation for
@@ -131,7 +182,7 @@ See the [Convex Auth docs](https://docs.convex.dev/auth) for setup instructions.
 # TODO
 
 - auth
-- paginated queries
+- ~~paginated queries~~ (done)
 - cleanup / unsubscribe in useEffect; something with hot reloading may not be
   working right
 
