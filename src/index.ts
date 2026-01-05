@@ -98,8 +98,9 @@ function isConvexPaginatedQuery(
   "convexPaginatedQuery",
   FunctionReference<"query">,
   Record<string, any>,
+  number, // numItems - included in key so different page sizes are separate queries
 ] {
-  return queryKey.length >= 2 && queryKey[0] === "convexPaginatedQuery";
+  return queryKey.length >= 3 && queryKey[0] === "convexPaginatedQuery";
 }
 
 function hash(
@@ -120,11 +121,12 @@ function hashPaginatedQuery(
     "convexPaginatedQuery",
     FunctionReference<"query">,
     Record<string, any>,
+    number,
   ],
 ): string {
   return `convexPaginatedQuery|${getFunctionName(queryKey[1])}|${JSON.stringify(
     convexToJson(queryKey[2]),
-  )}`;
+  )}|${queryKey[3]}`;
 }
 
 export interface ConvexQueryClientOptions extends ConvexReactClientOptions {
@@ -402,10 +404,8 @@ export class ConvexQueryClient {
         switch (event.type) {
           case "added": {
             // Initialize tracking for this paginated query
-            const [_, func, baseArgs] = event.query.queryKey;
-            const numItems =
-              (event.query.options.meta as Record<string, unknown> | undefined)
-                ?.__convexNumItems ?? 10;
+            // numItems is in queryKey[3] to ensure different page sizes are separate queries
+            const [_, func, baseArgs, numItems] = event.query.queryKey;
 
             this.paginatedSubscriptions[event.query.queryHash] = {
               funcRef: func,
@@ -577,11 +577,9 @@ export class ConvexQueryClient {
         }
       }
       if (isConvexPaginatedQuery(context.queryKey)) {
-        const [_, func, baseArgs] = context.queryKey;
+        // numItems is in queryKey[3] to ensure different page sizes are separate queries
+        const [_, func, baseArgs, numItems] = context.queryKey;
         const pageParam = context.pageParam as ConvexPageParam;
-        const numItems =
-          (context.meta as Record<string, unknown> | undefined)?.__convexNumItems ??
-          10;
 
         const fullArgs = {
           ...baseArgs,
@@ -705,6 +703,7 @@ export class ConvexQueryClient {
       "convexPaginatedQuery",
       Query,
       PaginatedQueryArgs<Query>,
+      number,
     ];
     queryFn: QueryFunction<PaginationResult<PaginatedQueryItem<Query>>, readonly unknown[], ConvexPageParam>;
     initialPageParam: ConvexPageParam;
@@ -712,13 +711,13 @@ export class ConvexQueryClient {
       lastPage: PaginationResult<PaginatedQueryItem<Query>>,
     ) => ConvexPageParam | undefined;
     staleTime: number;
-    meta: { __convexNumItems: number };
   } => {
     return {
       queryKey: [
         "convexPaginatedQuery",
         getFunctionName(funcRef) as unknown as Query,
         args,
+        options.initialNumItems,
       ] as const,
       queryFn: this.queryFn(),
       initialPageParam: null as ConvexPageParam,
@@ -731,7 +730,6 @@ export class ConvexQueryClient {
         return lastPage.continueCursor;
       },
       staleTime: Infinity,
-      meta: { __convexNumItems: options.initialNumItems },
     };
   };
 }
@@ -903,13 +901,13 @@ export function convexPaginatedQuery<Query extends PaginatedQueryReference>(
     "convexPaginatedQuery",
     Query,
     PaginatedQueryArgs<Query> | Record<string, never>,
+    number,
   ];
   initialPageParam: ConvexPageParam;
   getNextPageParam: (
     lastPage: PaginationResult<PaginatedQueryItem<Query>>,
   ) => ConvexPageParam | undefined;
   staleTime: number;
-  meta: { __convexNumItems: number };
   enabled?: boolean;
 } {
   const skip = args === "skip";
@@ -922,6 +920,8 @@ export function convexPaginatedQuery<Query extends PaginatedQueryReference>(
       getFunctionName(funcRef) as unknown as Query,
       // TODO bigints are not serializable
       baseArgs,
+      // numItems in key ensures different page sizes are separate queries with separate caches
+      options.initialNumItems,
     ] as const,
     initialPageParam: null as ConvexPageParam,
     getNextPageParam: (
@@ -933,7 +933,6 @@ export function convexPaginatedQuery<Query extends PaginatedQueryReference>(
       return lastPage.continueCursor;
     },
     staleTime: Infinity,
-    meta: { __convexNumItems: options.initialNumItems },
     ...(skip ? { enabled: false } : {}),
   } as any;
 }
