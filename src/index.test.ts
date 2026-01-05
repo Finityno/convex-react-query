@@ -627,8 +627,10 @@ describe("paginated query options factory types", () => {
         { initialNumItems: 20 },
       );
 
-      // Query key should be tuple with "convexPaginatedQuery" prefix
+      // Query key should be tuple with "convexPaginatedQuery" prefix and numItems
       expectTypeOf(options.queryKey[0]).toEqualTypeOf<"convexPaginatedQuery">();
+      // numItems should be in the query key (position 3)
+      expectTypeOf(options.queryKey[3]).toEqualTypeOf<number>();
     }
   });
 
@@ -650,17 +652,26 @@ describe("paginated query options factory types", () => {
     }
   });
 
-  test("meta contains numItems", () => {
+  test("numItems is in query key for cache separation", () => {
     if (1 + 2 === 3) return; // type test only - prevent runtime execution
 
     {
-      const options = convexPaginatedQuery(
+      // Different numItems should result in different query keys
+      const options20 = convexPaginatedQuery(
         api.messages.listPaginated,
         { channelId: "123" },
         { initialNumItems: 20 },
       );
 
-      expectTypeOf(options.meta.__convexNumItems).toEqualTypeOf<number>();
+      const options50 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 50 },
+      );
+
+      // numItems is at position 3 in the query key
+      expectTypeOf(options20.queryKey[3]).toEqualTypeOf<number>();
+      expectTypeOf(options50.queryKey[3]).toEqualTypeOf<number>();
     }
   });
 });

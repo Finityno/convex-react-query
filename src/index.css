@@ -157,3 +157,129 @@ button:disabled {
   margin-top: 4px;
   cursor: pointer;
 }
+
+/* Navigation */
+.nav-buttons {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.nav-button {
+  background-color: #198754;
+}
+
+.nav-button:hover {
+  background-color: #157347;
+}
+
+.back-button {
+  margin-bottom: 16px;
+}
+
+/* Paginated Page */
+.paginated-page {
+  padding: 1em;
+  width: min(800px, 95vw);
+  margin: 0 auto;
+}
+
+.paginated-page h2 {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.cache-info {
+  background: #e7f3ff;
+  border: 1px solid #b6d4fe;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.cache-info small {
+  color: #6c757d;
+}
+
+.paginated-info {
+  text-align: center;
+  margin-bottom: 16px;
+  color: #495057;
+}
+
+.message-list {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.message-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.message-index {
+  color: #6c757d;
+  font-size: 12px;
+  min-width: 30px;
+}
+
+.message-author {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.message-body {
+  flex: 1;
+  word-break: break-word;
+}
+
+.message-time {
+  color: #6c757d;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.load-hint {
+  color: #6c757d;
+  font-size: 14px;
+}
+
+.paginated-messages {
+  margin: 16px 0;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.paginated-messages h3 {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.search-messages {
+  margin: 16px 0;
+  text-align: center;
+}
+
+.search-messages input {
+  border: 1px solid #ced4da;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 16px;
+  width: 200px;
+}
+
+.search-messages ul {
+  text-align: left;
+  margin-top: 8px;
+}

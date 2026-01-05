@@ -227,9 +227,121 @@ function PaginatedMessages() {
   );
 }
 
+// Dedicated paginated page to test cache persistence
+function PaginatedPage({ onBack }: { onBack: () => void }) {
+  const [mountTime] = useState(() => Date.now());
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isPending,
+    isFetching,
+    error,
+    dataUpdatedAt,
+  } = useInfiniteQuery({
+    ...convexPaginatedQuery(api.messages.listPaginated, {}, { initialNumItems: 25 }),
+    // Cache for 5 minutes after unmount (default)
+    gcTime: 1000 * 60 * 5,
+  });
+
+  const messages = data?.pages.flatMap((page) => page.page) ?? [];
+
+  // Determine if data came from cache (was already available when component mounted)
+  const dataWasCached = dataUpdatedAt && dataUpdatedAt < mountTime;
+  const cacheAge = dataUpdatedAt ? Math.round((Date.now() - dataUpdatedAt) / 1000) : 0;
+
+  return (
+    <div className="paginated-page">
+      <button onClick={onBack} className="back-button">
+        ← Back to Chat
+      </button>
+      <h2>Paginated Messages Demo (25 per page)</h2>
+
+      <div className="cache-info">
+        <strong>Cache Status:</strong>
+        {isPending ? (
+          <span> Loading fresh data...</span>
+        ) : dataWasCached ? (
+          <span style={{ color: "green" }}> ✓ Loaded instantly from cache! (fetched {cacheAge}s ago)</span>
+        ) : (
+          <span> Fresh data loaded just now</span>
+        )}
+        {isFetching && !isPending && <span> (updating...)</span>}
+        <br />
+        <small>
+          Navigate away and come back - data persists!
+          The cache stays for 5 minutes after unmount.
+        </small>
+      </div>
+
+      {error ? (
+        <div>Error: {error.message}</div>
+      ) : (
+        <>
+          <p className="paginated-info">
+            Showing {messages.length} messages across {data?.pages.length ?? 0} page(s).
+            <br />
+            <strong>Real-time:</strong> Each page has its own WebSocket subscription.
+            Send a message from another tab to see instant updates!
+          </p>
+
+          <ul className="message-list">
+            {messages.map((message, index) => (
+              <li key={message._id}>
+                <span className="message-index">#{index + 1}</span>
+                <span className="message-author">{message.authorEmail ?? "Unknown"}:</span>
+                <span className="message-body">{message.body}</span>
+                <span className="message-time">
+                  {new Date(message._creationTime).toLocaleTimeString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="pagination-controls">
+            <button
+              onClick={() => fetchNextPage()}
+              disabled={!hasNextPage || isFetchingNextPage}
+            >
+              {isFetchingNextPage
+                ? "Loading 25 more..."
+                : hasNextPage
+                  ? `Load 25 More`
+                  : "No more messages"}
+            </button>
+            {hasNextPage && (
+              <span className="load-hint">
+                Click to load more - all pages get real-time updates
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const { signOut } = useAuthActions();
+  const [page, setPage] = useState<"chat" | "paginated">("chat");
 
+  // Show the paginated demo page
+  if (page === "paginated") {
+    return <PaginatedPage onBack={() => setPage("chat")} />;
+  }
+
+  // Show the main chat page
+  return <ChatPage onNavigate={() => setPage("paginated")} onSignOut={signOut} />;
+}
+
+function ChatPage({
+  onNavigate,
+  onSignOut,
+}: {
+  onNavigate: () => void;
+  onSignOut: () => Promise<void>;
+}) {
   const { data, error, isPending } = useQuery({
     // This query updates reactively.
     ...convexQuery(api.messages.list),
@@ -269,15 +381,19 @@ function App() {
   }
   return (
     <main>
-      <button type="button" onClick={() => void signOut()}>
-        Sign out
-      </button>
+      <div className="nav-buttons">
+        <button type="button" onClick={() => void onSignOut()}>
+          Sign out
+        </button>
+        <button type="button" onClick={onNavigate} className="nav-button">
+          Go to Paginated Demo →
+        </button>
+      </div>
       <h1>Convex Chat</h1>
       <Weather />
       <MessageCount />
       <SuspenseMessageCountWithFallback />
       <SearchMessages />
-      <PaginatedMessages />
       <p className="badge">
         <span>{user?.email}</span>
       </p>
