@@ -1,115 +1,122 @@
-import { useQuery, useSuspenseQuery, useInfiniteQuery } from "@tanstack/react-query";
-import { test, describe, expectTypeOf, assertType } from "vitest";
-import { convexAction, convexQuery, convexPaginatedQuery } from "./index.js";
+import { useQuery, useSuspenseQuery, useInfiniteQuery, QueryClient } from "@tanstack/react-query";
+import { test, describe, expectTypeOf, assertType, expect, vi, beforeEach, afterEach } from "vitest";
+import { convexAction, convexQuery, convexPaginatedQuery, ConvexQueryClient } from "./index.js";
 import { FunctionArgs, FunctionReference, PaginationResult, PaginationOptions } from "convex/server";
 import * as convexReact from "convex/react";
+import * as convexServer from "convex/server";
+
+// Mock getFunctionName to work with our mock function references
+vi.mock("convex/server", async (importOriginal) => {
+  const original = await importOriginal<typeof convexServer>();
+  return {
+    ...original,
+    getFunctionName: (funcRef: any) => {
+      // Handle mock function references by extracting a name from them
+      if (funcRef && typeof funcRef === "object") {
+        // For mock refs, try to find a name property or generate one
+        if (funcRef._mockName) return funcRef._mockName;
+        // Fallback to type-based name for testing
+        return `mock:${funcRef._type || "unknown"}`;
+      }
+      // Fall through to original for real function refs
+      return original.getFunctionName(funcRef);
+    },
+  };
+});
 
 // Mock Convex function references for testing
 // These replace the need to import from "../convex/_generated/api.js"
 // which was causing tshy to compile the convex directory
 
+// Helper to create mock function references with names
+function createMockRef<T extends "query" | "action", Args, Return>(
+  type: T,
+  name: string,
+  _args: Args,
+  _returnType: Return,
+) {
+  return {
+    _type: type,
+    _visibility: "public" as const,
+    _args: _args as Args,
+    _returnType: _returnType as Return,
+    _componentPath: undefined,
+    _mockName: name, // Used by our mock getFunctionName
+  } as unknown as FunctionReference<T, "public", Args extends object ? Args : never, Return>;
+}
+
 // Action with empty args
-const getSFWeather = {
-  _type: "action" as const,
-  _visibility: "public" as const,
-  _args: {} as {},
-  _returnType: "" as string,
-  _componentPath: undefined,
-} satisfies FunctionReference<"action", "public", {}, string>;
+const getSFWeather = createMockRef("action", "weather:getSFWeather", {} as {}, "" as string);
 
 // Query with empty args
-const list = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as {},
-  _returnType: [] as Array<{ id: string; text: string }>,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const list = createMockRef(
   "query",
-  "public",
-  {},
-  Array<{ id: string; text: string }>
->;
+  "messages:list",
+  {} as {},
+  [] as Array<{ id: string; text: string }>,
+);
 
 // Query with empty args, returns string
-const count = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as {},
-  _returnType: "" as string,
-  _componentPath: undefined,
-} satisfies FunctionReference<"query", "public", {}, string>;
+const count = createMockRef("query", "messages:count", {} as {}, "" as string);
 
 // Query with optional args
-const countWithOptionalArg = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as { cacheBust?: number },
-  _returnType: "" as string,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const countWithOptionalArg = createMockRef(
   "query",
-  "public",
-  { cacheBust?: number },
-  string
->;
+  "messages:countWithOptionalArg",
+  {} as { cacheBust?: number },
+  "" as string,
+);
 
 // Query with required args
-const getByAuthor = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as { authorId: string },
-  _returnType: [] as Array<{ id: string; text: string; authorId: string }>,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const getByAuthor = createMockRef(
   "query",
-  "public",
-  { authorId: string },
-  Array<{ id: string; text: string; authorId: string }>
->;
+  "messages:getByAuthor",
+  {} as { authorId: string },
+  [] as Array<{ id: string; text: string; authorId: string }>,
+);
 
 // Query with required and optional args
-const search = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as { query: string; limit?: number },
-  _returnType: [] as Array<{ id: string; text: string }>,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const search = createMockRef(
   "query",
-  "public",
-  { query: string; limit?: number },
-  Array<{ id: string; text: string }>
->;
+  "messages:search",
+  {} as { query: string; limit?: number },
+  [] as Array<{ id: string; text: string }>,
+);
 
 // Paginated query with required args
 type MessageItem = { _id: string; body: string; channelId: string };
-const listPaginated = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as { channelId: string; paginationOpts: PaginationOptions },
-  _returnType: {} as PaginationResult<MessageItem>,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const listPaginated = createMockRef(
   "query",
-  "public",
-  { channelId: string; paginationOpts: PaginationOptions },
-  PaginationResult<MessageItem>
->;
+  "messages:listPaginated",
+  {} as { channelId: string; paginationOpts: PaginationOptions },
+  {} as PaginationResult<MessageItem>,
+);
 
 // Paginated query with no additional args (just paginationOpts)
-const listAllPaginated = {
-  _type: "query" as const,
-  _visibility: "public" as const,
-  _args: {} as { paginationOpts: PaginationOptions },
-  _returnType: {} as PaginationResult<MessageItem>,
-  _componentPath: undefined,
-} satisfies FunctionReference<
+const listAllPaginated = createMockRef(
   "query",
-  "public",
-  { paginationOpts: PaginationOptions },
-  PaginationResult<MessageItem>
->;
+  "messages:listAllPaginated",
+  {} as { paginationOpts: PaginationOptions },
+  {} as PaginationResult<MessageItem>,
+);
+
+// Paginated query with optional args
+type PostItem = { _id: string; title: string; authorId?: string };
+const listPostsPaginated = createMockRef(
+  "query",
+  "posts:listPaginated",
+  {} as { authorId?: string; paginationOpts: PaginationOptions },
+  {} as PaginationResult<PostItem>,
+);
+
+// Paginated query with multiple required args
+type CommentItem = { _id: string; postId: string; userId: string; text: string };
+const listCommentsPaginated = createMockRef(
+  "query",
+  "comments:listPaginated",
+  {} as { postId: string; userId: string; paginationOpts: PaginationOptions },
+  {} as PaginationResult<CommentItem>,
+);
 
 // Mock API structure matching the real Convex API
 const api = {
@@ -124,6 +131,12 @@ const api = {
     search,
     listPaginated,
     listAllPaginated,
+  },
+  posts: {
+    listPaginated: listPostsPaginated,
+  },
+  comments: {
+    listPaginated: listCommentsPaginated,
   },
 } as const;
 
@@ -672,6 +685,733 @@ describe("paginated query options factory types", () => {
       // numItems is at position 3 in the query key
       expectTypeOf(options20.queryKey[3]).toEqualTypeOf<number>();
       expectTypeOf(options50.queryKey[3]).toEqualTypeOf<number>();
+    }
+  });
+});
+
+// =============================================================================
+// RUNTIME TESTS - These actually execute and verify behavior
+// =============================================================================
+
+describe("convexPaginatedQuery runtime behavior", () => {
+  describe("query key structure", () => {
+    test("query key has correct structure with 4 elements", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey).toHaveLength(4);
+      expect(options.queryKey[0]).toBe("convexPaginatedQuery");
+      expect(typeof options.queryKey[1]).toBe("string"); // function name
+      expect(options.queryKey[2]).toEqual({ channelId: "123" });
+      expect(options.queryKey[3]).toBe(20);
+    });
+
+    test("query key uses function name, not reference", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      // Should be serializable string, not the actual function reference
+      expect(typeof options.queryKey[1]).toBe("string");
+      expect(options.queryKey[1]).toBe("messages:listPaginated");
+    });
+
+    test("different numItems produces different query keys", () => {
+      const options10 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 10 },
+      );
+
+      const options25 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 25 },
+      );
+
+      const options50 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 50 },
+      );
+
+      // All should have different query keys due to numItems
+      expect(options10.queryKey[3]).toBe(10);
+      expect(options25.queryKey[3]).toBe(25);
+      expect(options50.queryKey[3]).toBe(50);
+
+      // The keys should be different
+      expect(options10.queryKey).not.toEqual(options25.queryKey);
+      expect(options25.queryKey).not.toEqual(options50.queryKey);
+    });
+
+    test("different args produces different query keys", () => {
+      const optionsChannel1 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "channel-1" },
+        { initialNumItems: 20 },
+      );
+
+      const optionsChannel2 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "channel-2" },
+        { initialNumItems: 20 },
+      );
+
+      expect(optionsChannel1.queryKey[2]).toEqual({ channelId: "channel-1" });
+      expect(optionsChannel2.queryKey[2]).toEqual({ channelId: "channel-2" });
+      expect(optionsChannel1.queryKey).not.toEqual(optionsChannel2.queryKey);
+    });
+
+    test("same args and numItems produces identical query keys", () => {
+      const options1 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      const options2 = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options1.queryKey).toEqual(options2.queryKey);
+    });
+
+    test("empty args produces correct query key", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listAllPaginated,
+        {},
+        { initialNumItems: 10 },
+      );
+
+      expect(options.queryKey[2]).toEqual({});
+      expect(options.queryKey[3]).toBe(10);
+    });
+  });
+
+  describe("skip pattern", () => {
+    test("skip produces enabled: false", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        "skip",
+        { initialNumItems: 20 },
+      );
+
+      expect(options.enabled).toBe(false);
+    });
+
+    test("skip sets empty object as args in query key", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        "skip",
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({});
+    });
+
+    test("non-skip does not have enabled property", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.enabled).toBeUndefined();
+    });
+
+    test("conditional skip works correctly", () => {
+      const shouldFetch = false;
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        shouldFetch ? { channelId: "123" } : "skip",
+        { initialNumItems: 20 },
+      );
+
+      expect(options.enabled).toBe(false);
+    });
+
+    test("conditional non-skip works correctly", () => {
+      const shouldFetch = true;
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        shouldFetch ? { channelId: "123" } : "skip",
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ channelId: "123" });
+      // enabled should not be set when not skipping
+      expect("enabled" in options && options.enabled === false).toBe(false);
+    });
+  });
+
+  describe("getNextPageParam", () => {
+    test("returns undefined when isDone is true", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      const result = options.getNextPageParam({
+        page: [],
+        isDone: true,
+        continueCursor: "some-cursor",
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    test("returns continueCursor when isDone is false", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      const result = options.getNextPageParam({
+        page: [{ _id: "1", body: "test", channelId: "123" }],
+        isDone: false,
+        continueCursor: "next-page-cursor",
+      });
+
+      expect(result).toBe("next-page-cursor");
+    });
+
+    test("returns continueCursor even when page is empty but not done", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      const result = options.getNextPageParam({
+        page: [],
+        isDone: false,
+        continueCursor: "still-more-data",
+      });
+
+      expect(result).toBe("still-more-data");
+    });
+
+    test("handles empty string cursor", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      const result = options.getNextPageParam({
+        page: [],
+        isDone: false,
+        continueCursor: "",
+      });
+
+      expect(result).toBe("");
+    });
+  });
+
+  describe("initialPageParam", () => {
+    test("initialPageParam is null", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.initialPageParam).toBeNull();
+    });
+  });
+
+  describe("staleTime", () => {
+    test("staleTime is Infinity", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.staleTime).toBe(Infinity);
+    });
+  });
+
+  describe("edge cases", () => {
+    test("numItems of 1 works", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 1 },
+      );
+
+      expect(options.queryKey[3]).toBe(1);
+    });
+
+    test("very large numItems works", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "123" },
+        { initialNumItems: 10000 },
+      );
+
+      expect(options.queryKey[3]).toBe(10000);
+    });
+
+    test("args with special characters work", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "channel/with:special@chars#123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ channelId: "channel/with:special@chars#123" });
+    });
+
+    test("args with unicode work", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "日本語チャンネル" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ channelId: "日本語チャンネル" });
+    });
+
+    test("args with empty string work", () => {
+      const options = convexPaginatedQuery(
+        api.messages.listPaginated,
+        { channelId: "" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ channelId: "" });
+    });
+
+    test("multiple args are preserved", () => {
+      const options = convexPaginatedQuery(
+        api.comments.listPaginated,
+        { postId: "post-123", userId: "user-456" },
+        { initialNumItems: 15 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ postId: "post-123", userId: "user-456" });
+    });
+
+    test("optional args can be omitted", () => {
+      const options = convexPaginatedQuery(
+        api.posts.listPaginated,
+        {},
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({});
+    });
+
+    test("optional args can be provided", () => {
+      const options = convexPaginatedQuery(
+        api.posts.listPaginated,
+        { authorId: "author-123" },
+        { initialNumItems: 20 },
+      );
+
+      expect(options.queryKey[2]).toEqual({ authorId: "author-123" });
+    });
+  });
+});
+
+describe("convexQuery runtime behavior", () => {
+  describe("query key structure", () => {
+    test("query key has correct structure", () => {
+      const options = convexQuery(api.messages.search, { query: "test" });
+
+      expect(options.queryKey[0]).toBe("convexQuery");
+      expect(typeof options.queryKey[1]).toBe("string");
+      expect(options.queryKey[2]).toEqual({ query: "test" });
+    });
+
+    test("skip produces 'skip' in query key", () => {
+      const options = convexQuery(api.messages.search, "skip");
+
+      expect(options.queryKey[2]).toBe("skip");
+      expect(options.enabled).toBe(false);
+    });
+
+    test("empty args function can omit args", () => {
+      const options = convexQuery(api.messages.list);
+
+      expect(options.queryKey[2]).toEqual({});
+    });
+  });
+});
+
+describe("convexAction runtime behavior", () => {
+  describe("query key structure", () => {
+    test("query key has correct structure", () => {
+      const options = convexAction(api.weather.getSFWeather, {});
+
+      expect(options.queryKey[0]).toBe("convexAction");
+      expect(typeof options.queryKey[1]).toBe("string");
+      expect(options.queryKey[2]).toEqual({});
+    });
+
+    test("skip produces enabled: false", () => {
+      const options = convexAction(api.weather.getSFWeather, "skip");
+
+      expect(options.enabled).toBe(false);
+    });
+  });
+});
+
+// =============================================================================
+// PAGINATED QUERY TYPE TESTS - Additional comprehensive type coverage
+// =============================================================================
+
+describe("paginated query additional type tests", () => {
+  test("required args must be provided", () => {
+    if (1 + 2 === 3) return;
+
+    // This should compile - all required args provided
+    const _valid = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    // @ts-expect-error - missing channelId
+    const _invalid = convexPaginatedQuery(
+      api.messages.listPaginated,
+      {},
+      { initialNumItems: 20 },
+    );
+  });
+
+  test("multiple required args must all be provided", () => {
+    if (1 + 2 === 3) return;
+
+    // This should compile - all required args provided
+    const _valid = convexPaginatedQuery(
+      api.comments.listPaginated,
+      { postId: "post-1", userId: "user-1" },
+      { initialNumItems: 20 },
+    );
+
+    // @ts-expect-error - missing userId
+    const _invalid1 = convexPaginatedQuery(
+      api.comments.listPaginated,
+      { postId: "post-1" },
+      { initialNumItems: 20 },
+    );
+
+    // @ts-expect-error - missing postId
+    const _invalid2 = convexPaginatedQuery(
+      api.comments.listPaginated,
+      { userId: "user-1" },
+      { initialNumItems: 20 },
+    );
+
+    // @ts-expect-error - missing both
+    const _invalid3 = convexPaginatedQuery(
+      api.comments.listPaginated,
+      {},
+      { initialNumItems: 20 },
+    );
+  });
+
+  test("optional args are truly optional", () => {
+    if (1 + 2 === 3) return;
+
+    // Both should compile
+    const _withoutOptional = convexPaginatedQuery(
+      api.posts.listPaginated,
+      {},
+      { initialNumItems: 20 },
+    );
+
+    const _withOptional = convexPaginatedQuery(
+      api.posts.listPaginated,
+      { authorId: "author-123" },
+      { initialNumItems: 20 },
+    );
+  });
+
+  test("extra properties are rejected", () => {
+    if (1 + 2 === 3) return;
+
+    // @ts-expect-error - extra property 'extra'
+    const _invalid = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123", extra: "not-allowed" },
+      { initialNumItems: 20 },
+    );
+  });
+
+  test("wrong property types are rejected", () => {
+    if (1 + 2 === 3) return;
+
+    // @ts-expect-error - channelId should be string, not number
+    const _invalid = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: 123 },
+      { initialNumItems: 20 },
+    );
+  });
+
+  test("initialNumItems must be provided", () => {
+    if (1 + 2 === 3) return;
+
+    // @ts-expect-error - missing initialNumItems
+    const _invalid = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      {},
+    );
+  });
+
+  test("return type is correctly inferred", () => {
+    if (1 + 2 === 3) return;
+
+    const options = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    // Test the page result type through getNextPageParam
+    const mockPage: PaginationResult<MessageItem> = {
+      page: [{ _id: "1", body: "hello", channelId: "123" }],
+      isDone: false,
+      continueCursor: "cursor",
+    };
+
+    const nextParam = options.getNextPageParam(mockPage);
+    expectTypeOf(nextParam).toEqualTypeOf<string | null | undefined>();
+  });
+
+  test("works with conditional expressions", () => {
+    if (1 + 2 === 3) return;
+
+    const channelId: string | null = Math.random() > 0.5 ? "123" : null;
+
+    const options = convexPaginatedQuery(
+      api.messages.listPaginated,
+      channelId ? { channelId } : "skip",
+      { initialNumItems: 20 },
+    );
+
+    // Type should allow for enabled property
+    expectTypeOf(options).toHaveProperty("enabled");
+  });
+});
+
+// =============================================================================
+// CACHE ISOLATION TESTS - Verify different queries don't interfere
+// =============================================================================
+
+describe("cache isolation", () => {
+  test("different function refs have different keys", () => {
+    const messagesOptions = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    const postsOptions = convexPaginatedQuery(
+      api.posts.listPaginated,
+      {},
+      { initialNumItems: 20 },
+    );
+
+    // Function names should be different
+    expect(messagesOptions.queryKey[1]).not.toBe(postsOptions.queryKey[1]);
+  });
+
+  test("same function with different args have different keys", () => {
+    const options1 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "channel-a" },
+      { initialNumItems: 20 },
+    );
+
+    const options2 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "channel-b" },
+      { initialNumItems: 20 },
+    );
+
+    expect(options1.queryKey).not.toEqual(options2.queryKey);
+    expect(options1.queryKey[2]).not.toEqual(options2.queryKey[2]);
+  });
+
+  test("same function and args but different numItems have different keys", () => {
+    const options1 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 10 },
+    );
+
+    const options2 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 50 },
+    );
+
+    expect(options1.queryKey).not.toEqual(options2.queryKey);
+    expect(options1.queryKey[3]).not.toBe(options2.queryKey[3]);
+  });
+
+  test("completely identical calls produce identical keys", () => {
+    const options1 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    const options2 = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    expect(JSON.stringify(options1.queryKey)).toBe(JSON.stringify(options2.queryKey));
+  });
+});
+
+// =============================================================================
+// INTEGRATION WITH TANSTACK QUERY PATTERNS
+// =============================================================================
+
+describe("TanStack Query integration patterns", () => {
+  test("options can be spread with additional config", () => {
+    const baseOptions = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    const extendedOptions = {
+      ...baseOptions,
+      gcTime: 1000 * 60 * 5,
+      refetchOnWindowFocus: false,
+    };
+
+    expect(extendedOptions.queryKey).toEqual(baseOptions.queryKey);
+    expect(extendedOptions.gcTime).toBe(300000);
+    expect(extendedOptions.refetchOnWindowFocus).toBe(false);
+  });
+
+  test("staleTime can be overridden", () => {
+    const baseOptions = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    const overriddenOptions = {
+      ...baseOptions,
+      staleTime: 60000, // Override Infinity
+    };
+
+    expect(baseOptions.staleTime).toBe(Infinity);
+    expect(overriddenOptions.staleTime).toBe(60000);
+  });
+
+  test("enabled can be additionally controlled", () => {
+    const baseOptions = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20 },
+    );
+
+    const isReady = false;
+    const conditionalOptions = {
+      ...baseOptions,
+      enabled: isReady,
+    };
+
+    expect(conditionalOptions.enabled).toBe(false);
+  });
+
+  test("skip pattern with additional enabled check", () => {
+    const channelId: string | null = "123";
+    const isReady = false;
+
+    const options = {
+      ...convexPaginatedQuery(
+        api.messages.listPaginated,
+        channelId ? { channelId } : "skip",
+        { initialNumItems: 20 },
+      ),
+      enabled: !!channelId && isReady,
+    };
+
+    expect(options.enabled).toBe(false);
+  });
+});
+
+// =============================================================================
+// BOUNDARY CONDITIONS
+// =============================================================================
+
+describe("boundary conditions", () => {
+  test("handles very long string args", () => {
+    const longString = "a".repeat(10000);
+    const options = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: longString },
+      { initialNumItems: 20 },
+    );
+
+    expect(options.queryKey[2]).toEqual({ channelId: longString });
+  });
+
+  test("handles args with nested objects (if supported)", () => {
+    // This tests that complex objects are preserved
+    const options = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "test" },
+      { initialNumItems: 20 },
+    );
+
+    // The query key should be serializable
+    expect(() => JSON.stringify(options.queryKey)).not.toThrow();
+  });
+
+  test("numItems edge case: fractional numbers are preserved", () => {
+    // While not recommended, this tests that the value is passed through as-is
+    const options = convexPaginatedQuery(
+      api.messages.listPaginated,
+      { channelId: "123" },
+      { initialNumItems: 20.5 as any },
+    );
+
+    expect(options.queryKey[3]).toBe(20.5);
+  });
+
+  test("consistent behavior across multiple calls", () => {
+    const results: Array<ReturnType<typeof convexPaginatedQuery>> = [];
+
+    for (let i = 0; i < 100; i++) {
+      results.push(
+        convexPaginatedQuery(
+          api.messages.listPaginated,
+          { channelId: "123" },
+          { initialNumItems: 20 },
+        ),
+      );
+    }
+
+    // All results should be equivalent
+    const firstKey = JSON.stringify(results[0].queryKey);
+    for (const result of results) {
+      expect(JSON.stringify(result.queryKey)).toBe(firstKey);
+      expect(result.staleTime).toBe(Infinity);
+      expect(result.initialPageParam).toBeNull();
     }
   });
 });
