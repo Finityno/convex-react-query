@@ -1,6 +1,7 @@
 import {
   QueryClient,
   QueryClientProvider,
+  useInfiniteQuery,
   useMutation,
   useQuery,
 } from "@tanstack/react-query";
@@ -15,6 +16,7 @@ import ReactDOM from "react-dom/client";
 import {
   ConvexQueryClient,
   convexAction,
+  convexPaginatedQuery,
   convexQuery,
   useConvexMutation,
 } from "./index.js";
@@ -177,6 +179,54 @@ function SearchMessages() {
   );
 }
 
+function PaginatedMessages() {
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isPending,
+    error,
+  } = useInfiniteQuery(
+    convexPaginatedQuery(api.messages.listPaginated, {}, { initialNumItems: 3 }),
+  );
+
+  if (isPending) return <div>Loading paginated messages...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  // Flatten pages into single array
+  const messages = data?.pages.flatMap((page) => page.page) ?? [];
+
+  return (
+    <div className="paginated-messages">
+      <h3>Paginated Messages (Load More Demo)</h3>
+      <p className="paginated-info">
+        Loaded {messages.length} messages across {data?.pages.length} page(s).
+        Each page subscribes to real-time updates!
+      </p>
+      <ul>
+        {messages.map((message) => (
+          <li key={message._id}>
+            <span>{message.authorEmail ?? "Unknown"}:</span>
+            <span>{message.body}</span>
+            <span>{new Date(message._creationTime).toLocaleTimeString()}</span>
+          </li>
+        ))}
+      </ul>
+      <button
+        onClick={() => fetchNextPage()}
+        disabled={!hasNextPage || isFetchingNextPage}
+      >
+        {isFetchingNextPage
+          ? "Loading more..."
+          : hasNextPage
+            ? "Load More"
+            : "No more messages"}
+      </button>
+    </div>
+  );
+}
+
 function App() {
   const { signOut } = useAuthActions();
 
@@ -227,6 +277,7 @@ function App() {
       <MessageCount />
       <SuspenseMessageCountWithFallback />
       <SearchMessages />
+      <PaginatedMessages />
       <p className="badge">
         <span>{user?.email}</span>
       </p>

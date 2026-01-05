@@ -1,5 +1,6 @@
 import { mutation } from "./_generated/server.js";
 import { query } from "./_generated/server.js";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { vv } from "./schema.js";
 
@@ -71,6 +72,35 @@ export const search = query({
       m.body.toLowerCase().includes(args.query.toLowerCase()),
     );
     return filtered.slice(0, args.limit ?? 10);
+  },
+});
+
+export const listPaginated = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const results = await ctx.db
+      .query("messages")
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    // Enrich messages with author email
+    const enrichedPage = await Promise.all(
+      results.page.map(async (message) => {
+        const author = await ctx.db.get(message.author);
+        return {
+          ...message,
+          authorId: author?._id,
+          authorEmail: author?.email,
+        };
+      }),
+    );
+
+    return {
+      ...results,
+      page: enrichedPage,
+    };
   },
 });
 
